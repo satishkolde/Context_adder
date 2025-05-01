@@ -1,48 +1,55 @@
-from flask import Flask, request, jsonify, render_template
-import csv
+from flask import Flask, request, jsonify, render_template, send_from_directory
+import pandas as pd
 import os
 
 app = Flask(__name__)
 
-CSV_FILE = "data/sample.csv"
+CSV_FILE = "data.csv"
 
-# Load the CSV file into memory
-def load_csv():
-    with open(CSV_FILE, newline='', encoding='utf-8') as csvfile:
-        return list(csv.DictReader(csvfile))
+# Load or initialize CSV
+def load_data():
+    if os.path.exists(CSV_FILE):
+        return pd.read_csv(CSV_FILE)
+    else:
+        return pd.DataFrame(columns=["text", "context", "sentiment", "risk"])
 
-data = load_csv()
+def save_data(df):
+    df.to_csv(CSV_FILE, index=False)
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route("/get_row")
-def get_row():
-    for i, row in enumerate(data):
-        if not row.get("context"):
-            return jsonify({"index": i, "text": row["text"]})
-    return jsonify({"message": "All done! Great job 🎉"})
+@app.route("/get_text", methods=["GET"])
+def get_text():
+    df = load_data()
+    df_unlabeled = df[df["context"].isnull()]
+    if not df_unlabeled.empty:
+        row = df_unlabeled.iloc[0]
+        return jsonify({
+            "index": int(row.name),
+            "text": row["text"]
+        })
+    else:
+        return jsonify({"message": "All rows have been labeled."})
 
 @app.route("/submit_label", methods=["POST"])
 def submit_label():
-    req_data = request.get_json()
-    index = req_data.get("index")
-    context = req_data.get("context")
+    index = int(request.form.get("index"))
+    context = request.form.get("context")
+    sentiment = request.form.get("sentiment")
+    risk = request.form.get("risk")
 
-    if index is None or context is None:
-        return jsonify({"error": "Missing index or context"}), 400
+    df = load_data()
+    if 0 <= index < len(df):
+        df.at[index, "context"] = context
+        df.at[index, "sentiment"] = sentiment
+        df.at[index, "risk"] = risk
+        save_data(df)
+        return jsonify({"message": "Label submitted successfully"})
+    else:
+        return jsonify({"message": "Invalid index"}), 404
 
-    data[int(index)]["context"] = context
-
-    # Save back to CSV
-    fieldnames = data[0].keys()
-    with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(data)
-
-    return jsonify({"message": "Context added successfully!"})
-
+# Run app
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
